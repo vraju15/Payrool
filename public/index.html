@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payroll & Attendance Management System</title>
+  <!-- Main Styles -->
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-container">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar" id="app-sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-icon">₽</div>
+        <span class="brand-name">PAYROLL HUB</span>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-view="dashboard" id="nav-dashboard">
+          <span class="nav-icon" id="icon-dashboard"></span>
+          <span class="nav-label">Dashboard</span>
+        </button>
+        <button class="nav-item" data-view="attendance" id="nav-attendance">
+          <span class="nav-icon" id="icon-attendance"></span>
+          <span class="nav-label">Mark Attendance</span>
+        </button>
+        <button class="nav-item" data-view="employees" id="nav-employees">
+          <span class="nav-icon" id="icon-employees"></span>
+          <span class="nav-label">Employees</span>
+        </button>
+        <button class="nav-item" data-view="sites" id="nav-sites">
+          <span class="nav-icon" id="icon-sites"></span>
+          <span class="nav-label">Site Locations</span>
+        </button>
+        <button class="nav-item" data-view="payroll" id="nav-payroll">
+          <span class="nav-icon" id="icon-payroll"></span>
+          <span class="nav-label">Payroll Calculator</span>
+        </button>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <div class="footer-avatar">AD</div>
+        <div class="footer-info">
+          <span class="footer-name">Admin Portal</span>
+          <span class="footer-role">Master Access</span>
+        </div>
+      </div>
+    </aside>
+    
+    <!-- Main Workspace -->
+    <main class="main-panel">
+      <!-- Main Header -->
+      <header class="main-header">
+        <div class="header-title-section">
+          <h1 class="header-title" id="view-title">Dashboard</h1>
+          <p class="header-subtitle" id="view-subtitle">Real-time statistics & workforce metrics</p>
+        </div>
+        
+        <div class="header-actions">
+          <div class="badge" id="db-status-badge">
+            <span class="badge-icon" id="icon-db"></span>
+            <span id="db-status-text">Connecting...</span>
+          </div>
+          <button class="header-btn" id="db-seed-btn" style="display: none;">
+            <span class="btn-icon" id="icon-plus"></span>
+            Seed PostgreSQL
+          </button>
+        </div>
+      </header>
+      
+      <!-- Core Content Workspace -->
+      <section class="content-body" id="app-content-workspace">
+        <!-- Content gets dynamically injected here by app.js -->
+        <div class="empty-state">
+          <span id="workspace-loading-spinner"></span>
+          <h3>Loading Payroll System</h3>
+          <p>Compiling visual interfaces and establishing database connections...</p>
+        </div>
+      </section>
+    </main>
+    
+  </div>
+
+  <!-- Modal Overlay Container -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal-container" id="modal-container">
+      <!-- Injected modal structures -->
+    </div>
+  </div>
+
+  <!-- Toast Notification Hub -->
+  <div class="toast-container" id="toast-hub"></div>
+
+  <!-- App Entry Code -->
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
