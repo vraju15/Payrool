@@ -27,6 +27,24 @@ const asyncHandler = (fn) => (req, res, next) => {
   });
 };
 
+// Lightweight session store
+const sessions = new Map();
+
+// Authentication Middleware
+const authenticateSession = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized: Session missing' });
+  }
+  const token = authHeader.split(' ')[1];
+  const sessionUser = sessions.get(token);
+  if (!sessionUser) {
+    return res.status(401).json({ error: 'Unauthorized: Session expired' });
+  }
+  req.user = sessionUser;
+  next();
+};
+
 // --- SYSTEM API ROUTING ---
 
 // 1. DB STATUS & CONFIGURATION
@@ -47,36 +65,87 @@ app.post('/api/seed-db', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// 2. DASHBOARD STATS
-app.get('/api/dashboard/stats', asyncHandler(async (req, res) => {
-  const stats = await dbService.getDashboardStats();
+// 2. AUTHENTICATION ENDPOINTS
+app.post('/api/login', asyncHandler(async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+  const user = await dbService.authenticateUser(username, password);
+  if (!user) {
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+  const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
+  sessions.set(token, user);
+  res.json({ token, user });
+}));
+
+app.post('/api/logout', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    sessions.delete(token);
+  }
+  res.json({ success: true });
+});
+
+app.get('/api/me', authenticateSession, (req, res) => {
+  res.json(req.user);
+});
+
+// 3. DASHBOARD STATS
+app.get('/api/dashboard/stats', authenticateSession, asyncHandler(async (req, res) => {
+  const siteId = req.user.role === 'manager' ? req.user.siteId : req.query.siteId;
+  const stats = await dbService.getDashboardStats(siteId);
   res.json(stats);
 }));
 
-// 3. SITES ENDPOINTS
-app.get('/api/sites', asyncHandler(async (req, res) => {
+// 4. SITES ENDPOINTS
+app.get('/api/sites', authenticateSession, asyncHandler(async (req, res) => {
   const sites = await dbService.getSites();
+  if (req.user.role === 'manager') {
+    return res.json(sites.filter(s => s.id === req.user.siteId));
+  }
   res.json(sites);
 }));
 
-app.post('/api/sites', asyncHandler(async (req, res) => {
-  const { name, location } = req.body;
+app.post('/api/sites', authenticateSession, asyncHandler(async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden: Admin access required' });
+  }
+  const { name, location, manager_username, manager_password } = req.body;
   if (!name || !location) {
     return res.status(400).json({ error: 'Name and location are required.' });
   }
-  const newSite = await dbService.createSite(name, location);
+  const newSite = await dbService.createSite(name, location, manager_username, manager_password);
   res.status(201).json(newSite);
 }));
 
-// 4. EMPLOYEES ENDPOINTS
-app.get('/api/employees', asyncHandler(async (req, res) => {
-  const { siteId } = req.query;
+app.put('/api/sites/:id', authenticateSession, asyncHandler(async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden: Admin access required' });
+  }
+  const { id } = req.params;
+  const { name, location, manager_username, manager_password } = req.body;
+  if (!name || !location) {
+    return res.status(400).json({ error: 'Name and location are required.' });
+  }
+  const updatedSite = await dbService.updateSite(id, name, location, manager_username, manager_password);
+  res.json(updatedSite);
+}));
+
+// 5. EMPLOYEES ENDPOINTS
+app.get('/api/employees', authenticateSession, asyncHandler(async (req, res) => {
+  const siteId = req.user.role === 'manager' ? req.user.siteId : req.query.siteId;
   const employees = await dbService.getEmployees(siteId);
   res.json(employees);
 }));
 
-app.post('/api/employees', asyncHandler(async (req, res) => {
-  const { employee_code, first_name, last_name, site_id, role, pay_type, pay_rate } = req.body;
+app.post('/api/employees', authenticateSession, asyncHandler(async (req, res) => {
+  let { employee_code, first_name, last_name, site_id, role, pay_type, pay_rate } = req.body;
+  if (req.user.role === 'manager') {
+    site_id = req.user.siteId;
+  }
   if (!employee_code || !first_name || !last_name || !role || !pay_rate) {
     return res.status(400).json({ error: 'Missing required employee fields.' });
   }
@@ -92,21 +161,41 @@ app.post('/api/employees', asyncHandler(async (req, res) => {
   res.status(201).json(newEmp);
 }));
 
-app.put('/api/employees/:id', asyncHandler(async (req, res) => {
+app.put('/api/employees/:id', authenticateSession, asyncHandler(async (req, res) => {
   const { id } = req.params;
+  
+  if (req.user.role === 'manager') {
+    const employees = await dbService.getEmployees(req.user.siteId);
+    const hasEmp = employees.some(e => e.id === parseInt(id));
+    if (!hasEmp) {
+      return res.status(403).json({ error: 'Access denied: employee belongs to another site' });
+    }
+    req.body.site_id = req.user.siteId;
+  }
+  
   const updatedEmp = await dbService.updateEmployee(id, req.body);
   res.json(updatedEmp);
 }));
 
-app.delete('/api/employees/:id', asyncHandler(async (req, res) => {
+app.delete('/api/employees/:id', authenticateSession, asyncHandler(async (req, res) => {
   const { id } = req.params;
+  
+  if (req.user.role === 'manager') {
+    const employees = await dbService.getEmployees(req.user.siteId);
+    const hasEmp = employees.some(e => e.id === parseInt(id));
+    if (!hasEmp) {
+      return res.status(403).json({ error: 'Access denied: employee belongs to another site' });
+    }
+  }
+  
   const result = await dbService.deleteEmployee(id);
   res.json(result);
 }));
 
-// 5. ATTENDANCE ENDPOINTS
-app.get('/api/attendance', asyncHandler(async (req, res) => {
-  const { siteId, date } = req.query;
+// 6. ATTENDANCE ENDPOINTS
+app.get('/api/attendance', authenticateSession, asyncHandler(async (req, res) => {
+  const siteId = req.user.role === 'manager' ? req.user.siteId : req.query.siteId;
+  const { date } = req.query;
   if (!siteId || !date) {
     return res.status(400).json({ error: 'siteId and date parameters are required.' });
   }
@@ -114,17 +203,23 @@ app.get('/api/attendance', asyncHandler(async (req, res) => {
   res.json(records);
 }));
 
-app.post('/api/attendance', asyncHandler(async (req, res) => {
-  const { siteId, date, records, markedBy } = req.body;
+app.post('/api/attendance', authenticateSession, asyncHandler(async (req, res) => {
+  let { siteId, date, records, markedBy } = req.body;
+  if (req.user.role === 'manager') {
+    siteId = req.user.siteId;
+  }
   if (!siteId || !date || !Array.isArray(records)) {
     return res.status(400).json({ error: 'siteId, date, and records array are required.' });
   }
-  const result = await dbService.saveAttendance(siteId, date, records, markedBy);
+  const result = await dbService.saveAttendance(siteId, date, records, markedBy || req.user.name);
   res.json(result);
 }));
 
-// 6. PAYROLL ENDPOINTS
-app.get('/api/payroll', asyncHandler(async (req, res) => {
+// 7. PAYROLL ENDPOINTS
+app.get('/api/payroll', authenticateSession, asyncHandler(async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden: Admin access required' });
+  }
   const { month, year } = req.query;
   if (!month || !year) {
     return res.status(400).json({ error: 'month and year parameters are required.' });
@@ -133,12 +228,51 @@ app.get('/api/payroll', asyncHandler(async (req, res) => {
   res.json(payroll);
 }));
 
-app.post('/api/payroll/payout', asyncHandler(async (req, res) => {
+app.post('/api/payroll/payout', authenticateSession, asyncHandler(async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden: Admin access required' });
+  }
   const { employeeId, month, year, status } = req.body;
   if (!employeeId || !month || !year || !status) {
     return res.status(400).json({ error: 'employeeId, month, year, and status are required.' });
   }
   const result = await dbService.updatePayoutStatus(employeeId, month, year, status);
+  res.json(result);
+}));
+
+// 8. EXPENSES ENDPOINTS
+app.get('/api/expenses', authenticateSession, asyncHandler(async (req, res) => {
+  const siteId = req.user.role === 'manager' ? req.user.siteId : req.query.siteId;
+  const { date } = req.query;
+  const expenses = await dbService.getExpenses(siteId, date);
+  res.json(expenses);
+}));
+
+app.post('/api/expenses', authenticateSession, asyncHandler(async (req, res) => {
+  const { date, amount, type, description } = req.body;
+  let siteId = req.body.siteId;
+  if (req.user.role === 'manager') {
+    siteId = req.user.siteId;
+  }
+  if (!siteId || !date || amount === undefined || !type || !description) {
+    return res.status(400).json({ error: 'Missing required expense fields.' });
+  }
+  const newExp = await dbService.createExpense({ siteId, date, amount, type, description });
+  res.status(201).json(newExp);
+}));
+
+app.delete('/api/expenses/:id', authenticateSession, asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  
+  if (req.user.role === 'manager') {
+    const expenses = await dbService.getExpenses(req.user.siteId);
+    const hasExp = expenses.some(e => e.id === parseInt(id));
+    if (!hasExp) {
+      return res.status(403).json({ error: 'Access denied: transaction belongs to another site' });
+    }
+  }
+  
+  const result = await dbService.deleteExpense(id);
   res.json(result);
 }));
 

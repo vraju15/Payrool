@@ -9,8 +9,143 @@ const state = {
   selectedSiteId: '',
   selectedDate: new Date().toISOString().split('T')[0],
   payrollMonth: new Date().getMonth() + 1,
-  payrollYear: new Date().getFullYear()
+  payrollYear: new Date().getFullYear(),
+  token: null,
+  user: null
 };
+
+// Global Fetch Interceptor for authentication
+const originalFetch = window.fetch;
+window.fetch = async (url, options = {}) => {
+  if (state.token) {
+    if (!options.headers) {
+      options.headers = {};
+    }
+    if (options.headers instanceof Headers) {
+      options.headers.set('Authorization', `Bearer ${state.token}`);
+    } else {
+      options.headers['Authorization'] = `Bearer ${state.token}`;
+    }
+  }
+  const response = await originalFetch(url, options);
+  if (response.status === 401 && state.token) {
+    logout();
+  }
+  return response;
+};
+
+function logout() {
+  state.token = null;
+  state.user = null;
+  localStorage.removeItem('payroll_token');
+  localStorage.removeItem('payroll_user');
+  renderLoginScreen();
+}
+
+function applyUserRoleUI() {
+  const user = state.user;
+  if (!user) return;
+  
+  const brandIcon = document.querySelector('.brand-icon');
+  if (brandIcon) brandIcon.textContent = '₹';
+  
+  const footerAvatar = document.querySelector('.footer-avatar');
+  const footerName = document.querySelector('.footer-name');
+  const footerRole = document.querySelector('.footer-role');
+  
+  if (footerAvatar) {
+    footerAvatar.textContent = user.role === 'admin' ? 'AD' : user.siteName.substring(0, 2).toUpperCase();
+  }
+  if (footerName) {
+    footerName.textContent = user.role === 'admin' ? 'Owner Portal' : user.siteName;
+  }
+  if (footerRole) {
+    footerRole.textContent = user.role === 'admin' ? 'Master Access' : 'Site Manager';
+  }
+  
+  const navSites = document.getElementById('nav-sites');
+  const navPayroll = document.getElementById('nav-payroll');
+  
+  if (user.role === 'manager') {
+    if (navSites) navSites.style.display = 'none';
+    if (navPayroll) navPayroll.style.display = 'none';
+    state.selectedSiteId = user.siteId;
+  } else {
+    if (navSites) navSites.style.display = 'flex';
+    if (navPayroll) navPayroll.style.display = 'flex';
+  }
+}
+
+function renderLoginScreen() {
+  const existing = document.getElementById('login-overlay-container');
+  if (existing) existing.remove();
+  
+  const overlay = document.createElement('div');
+  overlay.id = 'login-overlay-container';
+  overlay.className = 'login-overlay';
+  overlay.innerHTML = `
+    <div class="login-card">
+      <div class="login-header">
+        <div class="login-logo">₹</div>
+        <h2 class="login-title">Payroll Hub</h2>
+        <p class="login-subtitle">Sign in to your work location portal</p>
+      </div>
+      <form class="login-form" id="login-form">
+        <div class="form-group">
+          <label class="form-label">Username</label>
+          <input type="text" class="form-input" id="login-username" placeholder="Enter username..." required>
+        </div>
+        <div class="form-group" style="margin-bottom: 24px;">
+          <label class="form-label">Password</label>
+          <input type="password" class="form-input" id="login-password" placeholder="••••••••" required>
+        </div>
+        <button type="submit" class="header-btn primary" style="width:100%; justify-content:center; padding: 12px;">
+          Sign In
+        </button>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  
+  const form = document.getElementById('login-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+    
+    const loginBtn = form.querySelector('button');
+    loginBtn.disabled = true;
+    loginBtn.innerHTML = `${icons.spinner} Authenticating...`;
+    
+    try {
+      const res = await originalFetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        state.token = data.token;
+        state.user = data.user;
+        localStorage.setItem('payroll_token', data.token);
+        localStorage.setItem('payroll_user', JSON.stringify(data.user));
+        
+        overlay.remove();
+        showToast(`Welcome back, ${data.user.name}!`, 'success');
+        
+        applyUserRoleUI();
+        fetchInitialData();
+      } else {
+        showToast(data.error || 'Authentication failed', 'error');
+      }
+    } catch (err) {
+      showToast('Error connecting to login service', 'error');
+    } finally {
+      loginBtn.disabled = false;
+      loginBtn.innerHTML = 'Sign In';
+    }
+  });
+}
 
 // --- DOM ELEMENTS ---
 const elements = {
@@ -31,7 +166,18 @@ document.addEventListener('DOMContentLoaded', () => {
   setupIcons();
   setupNavigation();
   checkDbStatus();
-  fetchInitialData();
+  
+  const storedToken = localStorage.getItem('payroll_token');
+  const storedUser = localStorage.getItem('payroll_user');
+  
+  if (storedToken && storedUser) {
+    state.token = storedToken;
+    state.user = JSON.parse(storedUser);
+    applyUserRoleUI();
+    fetchInitialData();
+  } else {
+    renderLoginScreen();
+  }
 });
 
 // Load vector icons into specific structural containers
@@ -40,7 +186,9 @@ function setupIcons() {
   document.getElementById('icon-attendance').innerHTML = icons.attendance;
   document.getElementById('icon-employees').innerHTML = icons.employees;
   document.getElementById('icon-sites').innerHTML = icons.sites;
+  document.getElementById('icon-expenses').innerHTML = icons.expenses;
   document.getElementById('icon-payroll').innerHTML = icons.payroll;
+  document.getElementById('icon-logout').innerHTML = icons.logout;
   document.getElementById('icon-db').innerHTML = icons.db;
   document.getElementById('workspace-loading-spinner').innerHTML = icons.spinner;
 }
@@ -49,6 +197,13 @@ function setupIcons() {
 function setupNavigation() {
   const navItems = document.querySelectorAll('.nav-item');
   navItems.forEach(item => {
+    if (item.id === 'nav-logout') {
+      item.addEventListener('click', () => {
+        logout();
+      });
+      return;
+    }
+    
     item.addEventListener('click', () => {
       navItems.forEach(i => i.classList.remove('active'));
       item.classList.add('active');
@@ -104,6 +259,10 @@ function switchView(viewName) {
     elements.viewTitle.textContent = 'Site Locations';
     elements.viewSubtitle.textContent = 'Overview of operational project locations';
     renderSites();
+  } else if (viewName === 'expenses') {
+    elements.viewTitle.textContent = 'Expense Tracker';
+    elements.viewSubtitle.textContent = 'Track daily expenses and cash provisions for site locations';
+    renderExpensesView();
   } else if (viewName === 'payroll') {
     elements.viewTitle.textContent = 'Payroll & Salary Calculator';
     elements.viewSubtitle.textContent = 'Automate payouts based on employee attendance';
@@ -267,7 +426,7 @@ async function renderDashboard() {
           <div class="stat-card-glow crimson"></div>
           <div class="stat-info">
             <span class="stat-label">Payroll Paid (Month)</span>
-            <span class="stat-value">$${stats.monthlyPayrollTotal.toLocaleString()}</span>
+            <span class="stat-value">₹${stats.monthlyPayrollTotal.toLocaleString()}</span>
             <span class="stat-change positive">Verified disbursements</span>
           </div>
           <div class="stat-icon">${icons.payroll}</div>
@@ -428,6 +587,15 @@ async function renderAttendance() {
   });
 
   saveBtn.addEventListener('click', saveAttendanceRecords);
+
+  // Hide site selector if site manager
+  if (state.user && state.user.role === 'manager') {
+    const siteSelect = document.getElementById('att-site-select');
+    if (siteSelect) {
+      const filterItem = siteSelect.closest('.filter-item');
+      if (filterItem) filterItem.style.display = 'none';
+    }
+  }
 
   // Load records initially
   loadAttendanceRecords();
@@ -604,6 +772,15 @@ async function renderEmployees() {
   document.getElementById('emp-site-filter').addEventListener('change', loadEmployeesList);
   document.getElementById('emp-add-btn').addEventListener('click', () => openEmployeeModal());
 
+  // Hide site selector if site manager
+  if (state.user && state.user.role === 'manager') {
+    const siteFilter = document.getElementById('emp-site-filter');
+    if (siteFilter) {
+      const filterItem = siteFilter.closest('.filter-item');
+      if (filterItem) filterItem.style.display = 'none';
+    }
+  }
+
   loadEmployeesList();
 }
 
@@ -688,7 +865,7 @@ function filterEmployeesList() {
                   ${emp.pay_type}
                 </span>
               </td>
-              <td><strong class="payslip-mono">$${parseFloat(emp.pay_rate).toFixed(2)}${emp.pay_type === 'Daily' ? '/day' : '/mo'}</strong></td>
+              <td><strong class="payslip-mono">₹${parseFloat(emp.pay_rate).toFixed(2)}${emp.pay_type === 'Daily' ? '/day' : '/mo'}</strong></td>
               <td>
                 <span class="badge ${emp.is_active ? 'emerald' : 'crimson'}">
                   ${emp.is_active ? 'Active' : 'Suspended'}
@@ -748,7 +925,7 @@ window.openEmployeeModal = function(empId = null) {
             <label class="form-label">Assigned Site</label>
             <select class="form-select" name="site_id" required>
               <option value="">Select location</option>
-              ${state.sites.map(s => `<option value="${s.id}" ${(isEdit && emp.site_id == s.id) ? 'selected' : ''}>${s.name}</option>`).join('')}
+              ${state.sites.map(s => `<option value="${s.id}" ${(isEdit && emp.site_id == s.id) || state.sites.length === 1 ? 'selected' : ''}>${s.name}</option>`).join('')}
             </select>
           </div>
         </div>
@@ -767,7 +944,7 @@ window.openEmployeeModal = function(empId = null) {
             </select>
           </div>
           <div class="form-group">
-            <label class="form-label" id="modal-rate-label">Daily Wage ($)</label>
+            <label class="form-label" id="modal-rate-label">Daily Wage (₹)</label>
             <input type="number" step="0.01" class="form-input payslip-mono" name="pay_rate" required value="${isEdit ? emp.pay_rate : ''}">
           </div>
         </div>
@@ -798,7 +975,7 @@ window.openEmployeeModal = function(empId = null) {
   const payTypeSelect = document.getElementById('modal-pay-type');
   const rateLabel = document.getElementById('modal-rate-label');
   const updateLabel = () => {
-    rateLabel.textContent = payTypeSelect.value === 'Daily' ? 'Daily Wage ($)' : 'Monthly Wage ($)';
+    rateLabel.textContent = payTypeSelect.value === 'Daily' ? 'Daily Wage (₹)' : 'Monthly Wage (₹)';
   };
   payTypeSelect.addEventListener('change', updateLabel);
   updateLabel(); // call once initially
@@ -914,6 +1091,7 @@ async function renderSites() {
 
 async function loadSitesList() {
   const tableTarget = document.getElementById('sites-table-target');
+  const isAdmin = state.user && state.user.role === 'admin';
   try {
     const res = await fetch('/api/sites');
     state.sites = await res.json();
@@ -939,6 +1117,7 @@ async function loadSitesList() {
               <th>Location Address</th>
               <th>Status</th>
               <th>Created On</th>
+              ${isAdmin ? '<th style="text-align: right;">Actions</th>' : ''}
             </tr>
           </thead>
           <tbody>
@@ -954,6 +1133,13 @@ async function loadSitesList() {
                 </td>
                 <td><span class="badge emerald">Operational</span></td>
                 <td class="payslip-mono" style="font-size:0.8rem; color:var(--text-muted);">${new Date(s.created_at).toLocaleDateString()}</td>
+                ${isAdmin ? `
+                  <td style="text-align: right;">
+                    <button class="header-btn" style="padding:6px; border-radius: var(--radius-sm); margin-left: auto;" onclick="openSiteModal(${s.id})" title="Edit Site">
+                      ${icons.edit}
+                    </button>
+                  </td>
+                ` : ''}
               </tr>
             `).join('')}
           </tbody>
@@ -971,10 +1157,13 @@ async function loadSitesList() {
   }
 }
 
-function openSiteModal() {
+window.openSiteModal = function(siteId = null) {
+  const isEdit = siteId !== null;
+  const site = isEdit ? state.sites.find(s => s.id == siteId) : null;
+
   const html = `
     <div class="modal-header">
-      <h3 class="modal-title">Establish Project Site</h3>
+      <h3 class="modal-title">${isEdit ? 'Update Project Site' : 'Establish Project Site'}</h3>
       <button class="modal-close">${icons.close}</button>
     </div>
     <form id="site-form">
@@ -982,19 +1171,30 @@ function openSiteModal() {
         
         <div class="form-group">
           <label class="form-label">Project Site Name</label>
-          <input type="text" class="form-input" name="name" required placeholder="e.g. South Terminal Plaza" style="width:100%;">
+          <input type="text" class="form-input" name="name" required placeholder="e.g. South Terminal Plaza" style="width:100%;" value="${isEdit ? site.name : ''}">
         </div>
 
         <div class="form-group">
           <label class="form-label">Location Address / Coordinates</label>
-          <input type="text" class="form-input" name="location" required placeholder="e.g. 104 Harbor Side Pkwy, Sector 4" style="width:100%;">
+          <input type="text" class="form-input" name="location" required placeholder="e.g. 104 Harbor Side Pkwy, Sector 4" style="width:100%;" value="${isEdit ? site.location : ''}">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Manager Username</label>
+            <input type="text" class="form-input" name="manager_username" placeholder="e.g. manager_username" value="${isEdit ? (site.manager_username || '') : ''}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Manager Password</label>
+            <input type="password" class="form-input" name="manager_password" placeholder="••••••••" value="${isEdit ? (site.manager_password || '') : ''}">
+          </div>
         </div>
 
       </div>
       <div class="modal-footer">
         <button type="button" class="header-btn btn-cancel">Cancel</button>
         <button type="submit" class="header-btn primary" id="site-submit-btn">
-          Create Location
+          ${isEdit ? 'Save Changes' : 'Create Location'}
         </button>
       </div>
     </form>
@@ -1010,17 +1210,20 @@ function openSiteModal() {
 
     const submitBtn = document.getElementById('site-submit-btn');
     submitBtn.disabled = true;
-    submitBtn.innerHTML = `${icons.spinner} Creating...`;
+    submitBtn.innerHTML = `${icons.spinner} ${isEdit ? 'Saving...' : 'Creating...'}`;
 
     try {
-      const res = await fetch('/api/sites', {
-        method: 'POST',
+      const url = isEdit ? `/api/sites/${siteId}` : '/api/sites';
+      const method = isEdit ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
 
       if (res.ok) {
-        showToast('New project location added successfully!', 'success');
+        showToast(isEdit ? 'Project location updated successfully!' : 'New project location added successfully!', 'success');
         closeModal();
         
         // Refresh site data & list
@@ -1030,7 +1233,7 @@ function openSiteModal() {
         loadSitesList();
       } else {
         const errorData = await res.json();
-        showToast(errorData.error || 'Failed to add location.', 'error');
+        showToast(errorData.error || 'Failed to submit site form.', 'error');
       }
     } catch (err) {
       showToast('Error connecting to locations directory.', 'error');
@@ -1038,7 +1241,7 @@ function openSiteModal() {
       submitBtn.disabled = false;
     }
   });
-}
+};
 
 // --- 5. RENDER PAYROLL CALCULATOR & INVOICE SLIPS ---
 async function renderPayroll() {
@@ -1143,13 +1346,13 @@ async function loadPayrollRecords() {
                 </td>
                 <td>${row.role}</td>
                 <td><span class="badge ${row.pay_type === 'Monthly' ? 'emerald' : 'blue'}">${row.pay_type}</span></td>
-                <td class="payslip-mono">$${row.pay_rate.toFixed(2)}</td>
+                <td class="payslip-mono">₹${row.pay_rate.toFixed(2)}</td>
                 <td class="payslip-mono" style="color: var(--accent-emerald); font-weight:600;">${row.days_present}</td>
                 <td class="payslip-mono" style="color: var(--accent-crimson); font-weight:600;">${row.days_absent}</td>
                 <td class="payslip-mono" style="color: var(--accent-amber); font-weight:600;">${row.days_late}</td>
                 <td>
                   <strong class="payslip-mono" style="color:var(--accent-emerald); font-size:1.02rem;">
-                    $${row.calculated_salary.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    ₹${row.calculated_salary.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                   </strong>
                 </td>
                 <td>
@@ -1234,7 +1437,7 @@ window.viewItemizedPayslip = function(empId) {
         <span class="payslip-value">Daily Rate Wage</span>
         
         <span class="payslip-label">Daily Payout Rate:</span>
-        <span class="payslip-value payslip-mono">$${rateVal.toFixed(2)}</span>
+        <span class="payslip-value payslip-mono">₹${rateVal.toFixed(2)}</span>
         
         <span class="payslip-label">Days Present Logged:</span>
         <span class="payslip-value payslip-mono">${row.days_present} days</span>
@@ -1256,7 +1459,7 @@ window.viewItemizedPayslip = function(empId) {
         <span class="payslip-value">Monthly Base Contract</span>
         
         <span class="payslip-label">Monthly Gross Rate:</span>
-        <span class="payslip-value payslip-mono">$${rateVal.toFixed(2)}</span>
+        <span class="payslip-value payslip-mono">₹${rateVal.toFixed(2)}</span>
 
         <span class="payslip-label">Billing Period Days:</span>
         <span class="payslip-value payslip-mono">${maxDays} days</span>
@@ -1265,7 +1468,7 @@ window.viewItemizedPayslip = function(empId) {
         <span class="payslip-value payslip-mono" style="color:var(--accent-crimson); font-weight:600;">-${row.days_absent} days</span>
         
         <span class="payslip-label">Deduction For Absences:</span>
-        <span class="payslip-value payslip-mono" style="color:var(--accent-crimson); font-weight:600;">-$${deduction.toFixed(2)}</span>
+        <span class="payslip-value payslip-mono" style="color:var(--accent-crimson); font-weight:600;">-₹${deduction.toFixed(2)}</span>
       </div>
     `;
   }
@@ -1279,7 +1482,7 @@ window.viewItemizedPayslip = function(empId) {
       
       <div class="payslip-invoice" id="printable-payslip-invoice">
         <div class="payslip-header">
-          <div class="payslip-brand">₽ PAYROLL SERVICE</div>
+          <div class="payslip-brand">₹ PAYROLL SERVICE</div>
           <div class="payslip-meta">Site Attendance Payout Receipt</div>
           <div class="payslip-meta" style="font-family: monospace; font-size:0.75rem; margin-top:10px;">ID: TX-${row.employee_code}-${state.payrollMonth}${state.payrollYear}</div>
         </div>
@@ -1319,7 +1522,7 @@ window.viewItemizedPayslip = function(empId) {
 
         <div class="payslip-total-block">
           <span class="payslip-total-label">NET PAYOUT RELEASED:</span>
-          <span class="payslip-total-value">$${row.calculated_salary.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+          <span class="payslip-total-value">₹${row.calculated_salary.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
         </div>
 
         <div class="payslip-grid" style="font-size:0.75rem; margin-top:8px;">
@@ -1390,3 +1593,285 @@ window.viewItemizedPayslip = function(empId) {
     popupWin.document.close();
   });
 };
+
+// --- EXPENSE TRACKER VIEW ---
+async function renderExpensesView() {
+  if (state.sites.length === 0) {
+    elements.workspace.innerHTML = `
+      <div class="empty-state">
+        <span>${icons.sites}</span>
+        <h3>No site locations defined</h3>
+        <p>Please add a project site location first in the "Site Locations" tab.</p>
+      </div>
+    `;
+    return;
+  }
+
+  // Create workspace layout
+  elements.workspace.innerHTML = `
+    <div class="attendance-grid-container">
+      
+      <!-- Selection bar -->
+      <div class="attendance-filters">
+        <div class="filters-left">
+          <div class="filter-item" id="exp-site-filter-container">
+            <label class="form-label" for="exp-site-select">Project Site:</label>
+            <select class="form-select" id="exp-site-select" style="min-width: 220px;">
+              ${state.sites.map(s => `<option value="${s.id}" ${state.selectedSiteId == s.id ? 'selected' : ''}>${s.name}</option>`).join('')}
+            </select>
+          </div>
+          
+          <div class="filter-item">
+            <label class="form-label" for="exp-date-picker">Date:</label>
+            <input type="date" class="form-input" id="exp-date-picker" value="${state.selectedDate}" max="${new Date().toISOString().split('T')[0]}">
+          </div>
+        </div>
+        
+        <button class="header-btn primary" id="exp-add-btn">
+          ${icons.plus} Add Transaction
+        </button>
+      </div>
+
+      <!-- Real-time Balance Summary -->
+      <div class="expense-summary-grid" id="expense-summary-target">
+        <!-- Summaries load here -->
+      </div>
+
+      <!-- Main expense listing -->
+      <div class="card" style="padding:0; overflow:hidden;">
+        <div id="expense-sheet-target">
+          <div class="empty-state">
+            <span>${icons.spinner}</span>
+            <h3>Fetching expense logs...</h3>
+          </div>
+        </div>
+      </div>
+      
+    </div>
+  `;
+
+  // Hide site selector if site manager
+  if (state.user && state.user.role === 'manager') {
+    const container = document.getElementById('exp-site-filter-container');
+    if (container) container.style.display = 'none';
+  }
+
+  // Bind dropdown & date actions
+  const siteSelect = document.getElementById('exp-site-select');
+  const datePicker = document.getElementById('exp-date-picker');
+  const addBtn = document.getElementById('exp-add-btn');
+
+  siteSelect.addEventListener('change', (e) => {
+    state.selectedSiteId = e.target.value;
+    loadExpenseRecords();
+  });
+
+  datePicker.addEventListener('change', (e) => {
+    state.selectedDate = e.target.value;
+    loadExpenseRecords();
+  });
+
+  addBtn.addEventListener('click', openExpenseModal);
+
+  // Load records initially
+  loadExpenseRecords();
+}
+
+async function loadExpenseRecords() {
+  const summaryTarget = document.getElementById('expense-summary-target');
+  const sheetTarget = document.getElementById('expense-sheet-target');
+  
+  if (!summaryTarget || !sheetTarget) return;
+
+  try {
+    const res = await fetch(`/api/expenses?siteId=${state.selectedSiteId}&date=${state.selectedDate}`);
+    const expenses = await res.json();
+    
+    // Calculate daily metrics
+    let totalReceived = 0;
+    let totalSpent = 0;
+    
+    expenses.forEach(e => {
+      if (e.type === 'Received') {
+        totalReceived += parseFloat(e.amount);
+      } else {
+        totalSpent += parseFloat(e.amount);
+      }
+    });
+    
+    const balance = totalReceived - totalSpent;
+    
+    // Render summary cards
+    summaryTarget.innerHTML = `
+      <div class="expense-summary-card">
+        <span class="expense-summary-label">Cash Provided by Owner</span>
+        <span class="expense-summary-value received">₹${totalReceived.toFixed(2)}</span>
+      </div>
+      <div class="expense-summary-card">
+        <span class="expense-summary-label">Expenses Logged</span>
+        <span class="expense-summary-value spent">₹${totalSpent.toFixed(2)}</span>
+      </div>
+      <div class="expense-summary-card" style="border-left: 4px solid ${balance >= 0 ? 'var(--accent-emerald)' : 'var(--accent-crimson)'};">
+        <span class="expense-summary-label">Balance in Hand</span>
+        <span class="expense-summary-value balance" style="color: ${balance >= 0 ? 'var(--accent-emerald)' : 'var(--accent-crimson)'};">
+          ₹${balance.toFixed(2)}
+        </span>
+      </div>
+    `;
+    
+    // Render sheet table
+    if (expenses.length === 0) {
+      sheetTarget.innerHTML = `
+        <div class="empty-state">
+          <span>${icons.expenses}</span>
+          <h3>No transactions recorded for today</h3>
+          <p>Click "Add Transaction" to note down any expenses or owner-provided cash.</p>
+        </div>
+      `;
+      return;
+    }
+    
+    sheetTarget.innerHTML = `
+      <div class="table-wrapper">
+        <table class="custom-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Time</th>
+              <th>Description / Purpose</th>
+              <th>Type</th>
+              <th>Amount</th>
+              <th style="text-align: right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${expenses.map(e => `
+              <tr>
+                <td><span class="badge blue payslip-mono">#${e.id}</span></td>
+                <td class="payslip-mono" style="font-size:0.8rem; color:var(--text-muted);">
+                  ${new Date(e.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </td>
+                <td><strong>${e.description}</strong></td>
+                <td>
+                  <span class="badge ${e.type === 'Received' ? 'emerald' : 'crimson'}">
+                    ${e.type === 'Received' ? 'Received from Owner' : 'Spent Expense'}
+                  </span>
+                </td>
+                <td>
+                  <strong class="payslip-mono" style="color: ${e.type === 'Received' ? 'var(--accent-emerald)' : 'var(--accent-crimson)'};">
+                    ${e.type === 'Received' ? '+' : '-'}₹${parseFloat(e.amount).toFixed(2)}
+                  </strong>
+                </td>
+                <td style="text-align: right;">
+                  <button class="header-btn" style="padding:6px; border-radius: var(--radius-sm); color: var(--accent-crimson); margin-left: auto;" 
+                    onclick="deleteExpenseRecord(${e.id})" title="Delete Transaction">
+                    ${icons.close}
+                  </button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    sheetTarget.innerHTML = `
+      <div class="empty-state">
+        <span style="color:var(--accent-crimson);">${icons.inactive}</span>
+        <h3>Failed to fetch expense records</h3>
+        <p>Error: ${err.message}</p>
+      </div>
+    `;
+  }
+}
+
+window.deleteExpenseRecord = async function(id) {
+  if (!confirm('Are you sure you want to delete this transaction record?')) return;
+  try {
+    const res = await fetch(`/api/expenses/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      showToast('Transaction deleted successfully.', 'success');
+      loadExpenseRecords();
+    } else {
+      showToast('Failed to delete transaction.', 'error');
+    }
+  } catch (err) {
+    showToast('Network error deleting transaction.', 'error');
+  }
+};
+
+function openExpenseModal() {
+  const html = `
+    <div class="modal-header">
+      <h3 class="modal-title">Record Daily Transaction</h3>
+      <button class="modal-close">${icons.close}</button>
+    </div>
+    <form id="expense-form">
+      <div class="modal-body">
+        
+        <div class="form-group">
+          <label class="form-label">Transaction Type</label>
+          <select class="form-select" name="type" required>
+            <option value="Expense">Spent Expense</option>
+            <option value="Received">Received Cash from Owner</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Amount (₹)</label>
+          <input type="number" step="0.01" min="0.01" class="form-input payslip-mono" name="amount" required placeholder="0.00">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Description / Purpose</label>
+          <input type="text" class="form-input" name="description" required placeholder="e.g. Purchased brick loads, Paid diesel bill, Cash received from owner" style="width:100%;">
+        </div>
+
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="header-btn btn-cancel">Cancel</button>
+        <button type="submit" class="header-btn primary" id="expense-submit-btn">
+          Save Transaction
+        </button>
+      </div>
+    </form>
+  `;
+
+  openModal(html);
+
+  const form = document.getElementById('expense-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const payload = Object.fromEntries(fd.entries());
+    
+    payload.amount = parseFloat(payload.amount);
+    payload.date = state.selectedDate;
+    payload.siteId = state.selectedSiteId;
+
+    const submitBtn = document.getElementById('expense-submit-btn');
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = `${icons.spinner} Saving...`;
+
+    try {
+      const res = await fetch('/api/expenses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        showToast('Daily transaction recorded successfully!', 'success');
+        closeModal();
+        loadExpenseRecords();
+      } else {
+        const errorData = await res.json();
+        showToast(errorData.error || 'Failed to record transaction.', 'error');
+      }
+    } catch (err) {
+      showToast('Error connecting to expense services.', 'error');
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+}

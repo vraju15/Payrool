@@ -34,11 +34,11 @@ const ROLES = [
 ];
 
 const SITES_LIST = [
-  { name: 'Downtown Plaza', location: '450 Broadway St, NY' },
-  { name: 'North Warehouse', location: '102 Industrial Pkwy, NJ' },
-  { name: 'Metro Line Expansion', location: 'Zone 4 Transit Area' },
-  { name: 'East Suburb Hub', location: '89 Oak Rd, Long Island' },
-  { name: 'West Port Terminal', location: 'Pier 15 Harbor Dr' }
+  { name: 'Downtown Plaza', location: '450 Broadway St, NY', manager_username: 'downtown', manager_password: 'downtown123' },
+  { name: 'North Warehouse', location: '102 Industrial Pkwy, NJ', manager_username: 'north', manager_password: 'north123' },
+  { name: 'Metro Line Expansion', location: 'Zone 4 Transit Area', manager_username: 'metro', manager_password: 'metro123' },
+  { name: 'East Suburb Hub', location: '89 Oak Rd, Long Island', manager_username: 'east', manager_password: 'east123' },
+  { name: 'West Port Terminal', location: 'Pier 15 Harbor Dr', manager_username: 'west', manager_password: 'west123' }
 ];
 
 // Initialize DB Client
@@ -68,8 +68,13 @@ async function runPostgresMigration() {
       id SERIAL PRIMARY KEY,
       name VARCHAR(100) NOT NULL UNIQUE,
       location VARCHAR(200) NOT NULL,
+      manager_username VARCHAR(50) UNIQUE,
+      manager_password VARCHAR(100),
       created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
+
+    ALTER TABLE sites ADD COLUMN IF NOT EXISTS manager_username VARCHAR(50) UNIQUE;
+    ALTER TABLE sites ADD COLUMN IF NOT EXISTS manager_password VARCHAR(100);
 
     CREATE TABLE IF NOT EXISTS employees (
       id SERIAL PRIMARY KEY,
@@ -110,8 +115,35 @@ async function runPostgresMigration() {
       created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
       UNIQUE (employee_id, month, year)
     );
+
+    CREATE TABLE IF NOT EXISTS site_expenses (
+      id SERIAL PRIMARY KEY,
+      site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+      date DATE NOT NULL,
+      amount NUMERIC(10, 2) NOT NULL CHECK (amount >= 0),
+      type VARCHAR(10) CHECK (type IN ('Expense', 'Received')) NOT NULL,
+      description VARCHAR(255) NOT NULL,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
   `;
   await pool.query(ddl);
+  
+  // Auto-populate manager credentials for any sites that don't have them
+  try {
+    const sitesRes = await pool.query('SELECT * FROM sites WHERE manager_username IS NULL');
+    for (const site of sitesRes.rows) {
+      const defaultSite = SITES_LIST.find(sl => sl.name === site.name);
+      const username = defaultSite ? defaultSite.manager_username : 'manager_' + site.id;
+      const password = defaultSite ? defaultSite.manager_password : 'site123';
+      await pool.query(
+        'UPDATE sites SET manager_username = $1, manager_password = $2 WHERE id = $3',
+        [username, password, site.id]
+      );
+    }
+  } catch (err) {
+    console.warn('⚠️ Failed to auto-populate site manager credentials:', err.message);
+  }
+
   console.log('✅ PostgreSQL schema verified/created.');
 }
 
@@ -134,8 +166,8 @@ export async function seedPostgresDb() {
   const siteIds = [];
   for (const s of SITES_LIST) {
     const res = await pool.query(
-      'INSERT INTO sites (name, location) VALUES ($1, $2) RETURNING id',
-      [s.name, s.location]
+      'INSERT INTO sites (name, location, manager_username, manager_password) VALUES ($1, $2, $3, $4) RETURNING id',
+      [s.name, s.location, s.manager_username, s.manager_password]
     );
     siteIds.push(res.rows[0].id);
   }
@@ -213,6 +245,35 @@ export async function seedPostgresDb() {
 function initMockDb() {
   if (fs.existsSync(MOCK_DB_PATH)) {
     console.log('✅ Loaded existing Mock Database from database.json');
+    const db = loadMockDb();
+    let updated = false;
+    if (!db.expenses) {
+      db.expenses = [];
+      updated = true;
+    }
+    db.sites.forEach(s => {
+      const defaultSite = SITES_LIST.find(sl => sl.name === s.name);
+      if (defaultSite) {
+        if (!s.manager_username) {
+          s.manager_username = defaultSite.manager_username;
+          updated = true;
+        }
+        if (!s.manager_password) {
+          s.manager_password = defaultSite.manager_password;
+          updated = true;
+        }
+      } else {
+        if (!s.manager_username) {
+          s.manager_username = 'manager_' + s.id;
+          s.manager_password = 'site123';
+          updated = true;
+        }
+      }
+    });
+    if (updated) {
+      saveMockDb(db);
+      console.log('✅ Updated existing Mock Database sites with manager credentials');
+    }
     return;
   }
   
@@ -221,7 +282,8 @@ function initMockDb() {
     sites: [],
     employees: [],
     attendance: [],
-    payroll: []
+    payroll: [],
+    expenses: []
   };
 
   // 1. Create 5 Sites
@@ -230,6 +292,8 @@ function initMockDb() {
       id: idx + 1,
       name: s.name,
       location: s.location,
+      manager_username: s.manager_username,
+      manager_password: s.manager_password,
       created_at: new Date().toISOString()
     });
   });
@@ -332,11 +396,11 @@ export const dbService = {
     }
   },
 
-  async createSite(name, location) {
+  async createSite(name, location, manager_username = null, manager_password = null) {
     if (isPostgresMode) {
       const res = await pool.query(
-        'INSERT INTO sites (name, location) VALUES ($1, $2) RETURNING *',
-        [name, location]
+        'INSERT INTO sites (name, location, manager_username, manager_password) VALUES ($1, $2, $3, $4) RETURNING *',
+        [name, location, manager_username, manager_password]
       );
       return res.rows[0];
     } else {
@@ -345,11 +409,38 @@ export const dbService = {
         id: db.sites.length > 0 ? Math.max(...db.sites.map(s => s.id)) + 1 : 1,
         name,
         location,
+        manager_username: manager_username || ('manager_' + (db.sites.length + 1)),
+        manager_password: manager_password || 'site123',
         created_at: new Date().toISOString()
       };
       db.sites.push(newSite);
       saveMockDb(db);
       return newSite;
+    }
+  },
+
+  async updateSite(id, name, location, manager_username = null, manager_password = null) {
+    if (isPostgresMode) {
+      const res = await pool.query(
+        `UPDATE sites 
+         SET name = $1, location = $2, manager_username = $3, manager_password = $4
+         WHERE id = $5 RETURNING *`,
+        [name, location, manager_username, manager_password, id]
+      );
+      return res.rows[0];
+    } else {
+      const db = loadMockDb();
+      const idx = db.sites.findIndex(s => s.id === parseInt(id));
+      if (idx === -1) throw new Error('Site not found');
+      db.sites[idx] = {
+        ...db.sites[idx],
+        name,
+        location,
+        manager_username: manager_username || db.sites[idx].manager_username,
+        manager_password: manager_password || db.sites[idx].manager_password
+      };
+      saveMockDb(db);
+      return db.sites[idx];
     }
   },
 
@@ -718,25 +809,38 @@ export const dbService = {
   },
 
   // 5. DASHBOARD OPERATIONS
-  async getDashboardStats() {
+  async getDashboardStats(siteId = null) {
     const todayStr = new Date().toISOString().split('T')[0];
     
     if (isPostgresMode) {
-      const empsCount = await pool.query('SELECT COUNT(*) FROM employees WHERE is_active = TRUE');
-      const sitesCount = await pool.query('SELECT COUNT(*) FROM sites');
+      let empsQuery = 'SELECT COUNT(*) FROM employees WHERE is_active = TRUE';
+      let sitesQuery = 'SELECT COUNT(*) FROM sites';
+      let attendanceQuery = 'SELECT status, COUNT(*) FROM attendance WHERE date = $1 GROUP BY status';
+      let payrollQuery = 'SELECT SUM(calculated_salary) as total FROM payroll WHERE month = $1 AND year = $2';
       
-      const attendanceToday = await pool.query(
-        `SELECT status, COUNT(*) FROM attendance WHERE date = $1 GROUP BY status`,
-        [todayStr]
-      );
+      const empsParams = [];
+      const sitesParams = [];
+      const attendanceParams = [todayStr];
+      const payrollParams = [new Date().getMonth() + 1, new Date().getFullYear()];
       
-      // Monthly payroll sum
-      const currentMonth = new Date().getMonth() + 1;
-      const currentYear = new Date().getFullYear();
-      const payrollSum = await pool.query(
-        `SELECT SUM(calculated_salary) as total FROM payroll WHERE month = $1 AND year = $2`,
-        [currentMonth, currentYear]
-      );
+      if (siteId) {
+        empsQuery += ' AND site_id = $1';
+        empsParams.push(siteId);
+        
+        sitesQuery += ' WHERE id = $1';
+        sitesParams.push(siteId);
+        
+        attendanceQuery = 'SELECT status, COUNT(*) FROM attendance WHERE date = $1 AND site_id = $2 GROUP BY status';
+        attendanceParams.push(siteId);
+        
+        payrollQuery = 'SELECT SUM(p.calculated_salary) as total FROM payroll p JOIN employees e ON p.employee_id = e.id WHERE p.month = $1 AND p.year = $2 AND e.site_id = $3';
+        payrollParams.push(siteId);
+      }
+      
+      const empsCount = await pool.query(empsQuery, empsParams);
+      const sitesCount = await pool.query(sitesQuery, sitesParams);
+      const attendanceToday = await pool.query(attendanceQuery, attendanceParams);
+      const payrollSum = await pool.query(payrollQuery, payrollParams);
 
       const stats = {
         totalEmployees: parseInt(empsCount.rows[0].count),
@@ -758,19 +862,32 @@ export const dbService = {
       return stats;
     } else {
       const db = loadMockDb();
-      const activeEmps = db.employees.filter(e => e.is_active);
-      const todayAtt = db.attendance.filter(a => a.date === todayStr);
+      let activeEmps = db.employees.filter(e => e.is_active);
+      let todayAtt = db.attendance.filter(a => a.date === todayStr);
+      let sitesList = db.sites;
+
+      if (siteId) {
+        activeEmps = activeEmps.filter(e => e.site_id === parseInt(siteId));
+        todayAtt = todayAtt.filter(a => a.site_id === parseInt(siteId));
+        sitesList = sitesList.filter(s => s.id === parseInt(siteId));
+      }
 
       const currentMonth = new Date().getMonth() + 1;
       const currentYear = new Date().getFullYear();
       
       // Calculate estimated payroll if not fully marked paid
-      const payrollRecords = db.payroll.filter(p => p.month === currentMonth && p.year === currentYear);
+      let payrollRecords = db.payroll.filter(p => p.month === currentMonth && p.year === currentYear);
+      if (siteId) {
+        payrollRecords = payrollRecords.filter(p => {
+          const emp = db.employees.find(e => e.id === p.employee_id);
+          return emp && emp.site_id === parseInt(siteId);
+        });
+      }
       const paidSum = payrollRecords.reduce((acc, p) => acc + p.calculated_salary, 0);
 
       const stats = {
         totalEmployees: activeEmps.length,
-        totalSites: db.sites.length,
+        totalSites: sitesList.length,
         attendanceToday: {
           present: todayAtt.filter(a => a.status === 'Present').length,
           absent: todayAtt.filter(a => a.status === 'Absent').length,
@@ -785,7 +902,10 @@ export const dbService = {
         const dates = [...new Set(db.attendance.map(a => a.date))].sort();
         const latestDate = dates[dates.length - 1];
         if (latestDate) {
-          const latestAtt = db.attendance.filter(a => a.date === latestDate);
+          let latestAtt = db.attendance.filter(a => a.date === latestDate);
+          if (siteId) {
+            latestAtt = latestAtt.filter(a => a.site_id === parseInt(siteId));
+          }
           stats.attendanceToday.present = latestAtt.filter(a => a.status === 'Present').length;
           stats.attendanceToday.absent = latestAtt.filter(a => a.status === 'Absent').length;
           stats.attendanceToday.late = latestAtt.filter(a => a.status === 'Late').length;
@@ -793,6 +913,126 @@ export const dbService = {
       }
 
       return stats;
+    }
+  },
+
+  // 6. AUTHENTICATION & LOGIN OPERATIONS
+  async authenticateUser(username, password) {
+    if (username === 'admin' && password === 'admin123') {
+      return { role: 'admin', siteId: null, siteName: null, username: 'admin', name: 'System Owner' };
+    }
+    
+    // Find matching site
+    if (isPostgresMode) {
+      const res = await pool.query(
+        'SELECT * FROM sites WHERE manager_username = $1 AND manager_password = $2',
+        [username, password]
+      );
+      if (res.rows.length > 0) {
+        const site = res.rows[0];
+        return {
+          role: 'manager',
+          siteId: site.id,
+          siteName: site.name,
+          username: site.manager_username,
+          name: site.name + ' Manager'
+        };
+      }
+    } else {
+      const db = loadMockDb();
+      const site = db.sites.find(s => s.manager_username === username && s.manager_password === password);
+      if (site) {
+        return {
+          role: 'manager',
+          siteId: site.id,
+          siteName: site.name,
+          username: site.manager_username,
+          name: site.name + ' Manager'
+        };
+      }
+    }
+    return null;
+  },
+
+  // 7. EXPENSES TRACKER OPERATIONS
+  async getExpenses(siteId = null, date = null) {
+    if (isPostgresMode) {
+      let query = 'SELECT e.*, s.name as site_name FROM site_expenses e JOIN sites s ON e.site_id = s.id';
+      const params = [];
+      if (siteId) {
+        query += ' WHERE e.site_id = $1';
+        params.push(siteId);
+        if (date) {
+          query += ' AND e.date = $2';
+          params.push(date);
+        }
+      } else if (date) {
+        query += ' WHERE e.date = $1';
+        params.push(date);
+      }
+      query += ' ORDER BY e.id DESC';
+      const res = await pool.query(query, params);
+      return res.rows;
+    } else {
+      const db = loadMockDb();
+      if (!db.expenses) db.expenses = [];
+      let exps = db.expenses.map(e => {
+        const site = db.sites.find(s => s.id === e.site_id);
+        return { ...e, site_name: site ? site.name : 'Unknown Site' };
+      });
+      if (siteId) {
+        exps = exps.filter(e => e.site_id === parseInt(siteId));
+      }
+      if (date) {
+        exps = exps.filter(e => e.date === date);
+      }
+      return exps.sort((a, b) => b.id - a.id);
+    }
+  },
+
+  async createExpense(data) {
+    const { siteId, date, amount, type, description } = data;
+    if (isPostgresMode) {
+      const res = await pool.query(
+        'INSERT INTO site_expenses (site_id, date, amount, type, description) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        [siteId, date, amount, type, description]
+      );
+      // Fetch with site_name
+      const resSite = await pool.query(
+        'SELECT e.*, s.name as site_name FROM site_expenses e JOIN sites s ON e.site_id = s.id WHERE e.id = $1',
+        [res.rows[0].id]
+      );
+      return resSite.rows[0];
+    } else {
+      const db = loadMockDb();
+      if (!db.expenses) db.expenses = [];
+      const newExp = {
+        id: db.expenses.length > 0 ? Math.max(...db.expenses.map(e => e.id)) + 1 : 1,
+        site_id: parseInt(siteId),
+        date,
+        amount: parseFloat(amount),
+        type,
+        description,
+        created_at: new Date().toISOString()
+      };
+      db.expenses.push(newExp);
+      saveMockDb(db);
+      
+      const site = db.sites.find(s => s.id === newExp.site_id);
+      return { ...newExp, site_name: site ? site.name : 'Unknown Site' };
+    }
+  },
+
+  async deleteExpense(id) {
+    if (isPostgresMode) {
+      await pool.query('DELETE FROM site_expenses WHERE id = $1', [id]);
+      return { success: true };
+    } else {
+      const db = loadMockDb();
+      if (!db.expenses) db.expenses = [];
+      db.expenses = db.expenses.filter(e => e.id !== parseInt(id));
+      saveMockDb(db);
+      return { success: true };
     }
   }
 };

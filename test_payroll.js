@@ -71,9 +71,9 @@ testCases.forEach((tc, idx) => {
   const matched = result.calculated_salary === tc.expected_salary;
 
   console.log(`CASE ${idx + 1}: ${tc.name}`);
-  console.log(`👉 Inputs: Present=${tc.present_count}, Late=${tc.late_count}, Absent=${tc.absent_count}, Rate=$${tc.pay_rate}`);
-  console.log(`👉 Calculated: $${result.calculated_salary}`);
-  console.log(`👉 Expected  : $${tc.expected_salary}`);
+  console.log(`👉 Inputs: Present=${tc.present_count}, Late=${tc.late_count}, Absent=${tc.absent_count}, Rate=₹${tc.pay_rate}`);
+  console.log(`👉 Calculated: ₹${result.calculated_salary}`);
+  console.log(`👉 Expected  : ₹${tc.expected_salary}`);
   
   if (matched) {
     console.log('✅ SUCCESS\n');
