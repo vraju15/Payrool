@@ -165,6 +165,7 @@ const elements = {
 document.addEventListener('DOMContentLoaded', () => {
   setupIcons();
   setupNavigation();
+  setupMobileNavigation();
   checkDbStatus();
   
   const storedToken = localStorage.getItem('payroll_token');
@@ -179,6 +180,30 @@ document.addEventListener('DOMContentLoaded', () => {
     renderLoginScreen();
   }
 });
+
+function setupMobileNavigation() {
+  const toggleBtn = document.getElementById('mobile-nav-toggle');
+  const sidebar = document.getElementById('app-sidebar');
+
+  if (!toggleBtn || !sidebar) return;
+
+  const setSidebarOpen = (isOpen) => {
+    sidebar.classList.toggle('is-open', isOpen);
+    document.body.classList.toggle('sidebar-open', isOpen);
+  };
+
+  toggleBtn.addEventListener('click', () => {
+    setSidebarOpen(!sidebar.classList.contains('is-open'));
+  });
+
+  document.addEventListener('click', (event) => {
+    const clickInsideSidebar = sidebar.contains(event.target);
+    const clickToggle = toggleBtn.contains(event.target);
+    if (window.innerWidth <= 900 && !clickInsideSidebar && !clickToggle) {
+      setSidebarOpen(false);
+    }
+  });
+}
 
 // Load vector icons into specific structural containers
 function setupIcons() {
@@ -210,6 +235,11 @@ function setupNavigation() {
       item.classList.add('active');
       
       const view = item.getAttribute('data-view');
+      if (window.innerWidth <= 900) {
+        const sidebar = document.getElementById('app-sidebar');
+        if (sidebar) sidebar.classList.remove('is-open');
+        document.body.classList.remove('sidebar-open');
+      }
       switchView(view);
     });
   });
