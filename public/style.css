@@ -768,6 +768,11 @@ button, input, select, textarea {
   transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.modal-container.modal-wide {
+  max-width: 900px;
+  width: min(92vw, 900px);
+}
+
 .modal-overlay.active .modal-container {
   transform: translateY(0);
 }
@@ -1160,4 +1165,176 @@ button, input, select, textarea {
     opacity: 1;
     transform: scale(1) translateY(0);
   }
+}
+
+/* --- Progress Photos Styles --- */
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 24px;
+}
+
+.photo-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  transition: var(--transition-smooth);
+}
+
+.photo-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--text-dark);
+}
+
+.photo-img-wrapper {
+  position: relative;
+  width: 100%;
+  height: 200px;
+  background-color: var(--bg-app);
+  overflow: hidden;
+}
+
+.photo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: var(--transition-smooth);
+}
+
+.photo-card:hover .photo-img {
+  transform: scale(1.05);
+}
+
+.photo-clickable {
+  cursor: pointer;
+}
+
+.photo-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 2;
+}
+
+.photo-delete-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  background-color: rgba(239, 68, 68, 0.9);
+  color: white;
+  border: none;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: var(--transition-smooth);
+}
+
+.photo-delete-btn:hover {
+  background-color: var(--accent-crimson);
+}
+
+.photo-delete-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.photo-info {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.photo-desc {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-main);
+  line-height: 1.4;
+  margin-bottom: auto;
+}
+
+.photo-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-color);
+  padding-top: 10px;
+  margin-top: 8px;
+}
+
+.photo-date {
+  font-family: var(--font-mono);
+}
+
+.photo-site {
+  font-weight: 600;
+  color: var(--accent-primary);
+}
+
+.photo-viewer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 900px;
+  width: min(90vw, 900px);
+}
+
+.photo-viewer-frame {
+  width: 100%;
+  max-height: 72vh;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 12px;
+}
+
+.photo-viewer-image {
+  max-width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+}
+
+.photo-viewer-caption {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.file-preview-container {
+  width: 100%;
+  height: 160px;
+  border: 2px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 8px;
+  position: relative;
+  overflow: hidden;
+  background-color: var(--bg-app);
+}
+
+.file-preview-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }

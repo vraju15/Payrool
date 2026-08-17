@@ -16,7 +16,8 @@ const __dirname = path.dirname(__filename);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 // Middlewares
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.static(PUBLIC_DIR));
 
 // Helper for wrapping async endpoints
@@ -273,6 +274,41 @@ app.delete('/api/expenses/:id', authenticateSession, asyncHandler(async (req, re
   }
   
   const result = await dbService.deleteExpense(id);
+  res.json(result);
+}));
+
+// 9. PROGRESS PHOTOS ENDPOINTS
+app.get('/api/photos', authenticateSession, asyncHandler(async (req, res) => {
+  const siteId = req.user.role === 'manager' ? req.user.siteId : req.query.siteId;
+  const photos = await dbService.getPhotos(siteId);
+  res.json(photos);
+}));
+
+app.post('/api/photos', authenticateSession, asyncHandler(async (req, res) => {
+  const { date, description, imageData } = req.body;
+  let siteId = req.body.siteId;
+  if (req.user.role === 'manager') {
+    siteId = req.user.siteId;
+  }
+  if (!siteId || !date || !description || !imageData) {
+    return res.status(400).json({ error: 'Missing required progress photo fields.' });
+  }
+  const newPhoto = await dbService.createPhoto({ siteId, date, description, imageData });
+  res.status(201).json(newPhoto);
+}));
+
+app.delete('/api/photos/:id', authenticateSession, asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  
+  if (req.user.role === 'manager') {
+    const photos = await dbService.getPhotos(req.user.siteId);
+    const hasPhoto = photos.some(p => p.id === parseInt(id));
+    if (!hasPhoto) {
+      return res.status(403).json({ error: 'Access denied: photo belongs to another site' });
+    }
+  }
+  
+  const result = await dbService.deletePhoto(id);
   res.json(result);
 }));
 

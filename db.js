@@ -125,6 +125,15 @@ async function runPostgresMigration() {
       description VARCHAR(255) NOT NULL,
       created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS site_photos (
+      id SERIAL PRIMARY KEY,
+      site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+      date DATE NOT NULL,
+      description VARCHAR(255) NOT NULL,
+      image_data TEXT NOT NULL,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
   `;
   await pool.query(ddl);
   
@@ -251,6 +260,10 @@ function initMockDb() {
       db.expenses = [];
       updated = true;
     }
+    if (!db.photos) {
+      db.photos = [];
+      updated = true;
+    }
     db.sites.forEach(s => {
       const defaultSite = SITES_LIST.find(sl => sl.name === s.name);
       if (defaultSite) {
@@ -283,7 +296,8 @@ function initMockDb() {
     employees: [],
     attendance: [],
     payroll: [],
-    expenses: []
+    expenses: [],
+    photos: []
   };
 
   // 1. Create 5 Sites
@@ -546,7 +560,7 @@ export const dbService = {
   async getAttendance(siteId, date) {
     if (isPostgresMode) {
       const res = await pool.query(
-        `SELECT a.*, e.first_name, e.last_name, e.employee_code, e.role 
+        `SELECT a.id, e.id as employee_id, e.site_id, $2::date as date, a.status, a.notes, a.marked_by, e.first_name, e.last_name, e.employee_code, e.role 
          FROM employees e
          LEFT JOIN attendance a ON e.id = a.employee_id AND a.date = $2
          WHERE e.site_id = $1 AND e.is_active = TRUE`,
@@ -1031,6 +1045,77 @@ export const dbService = {
       const db = loadMockDb();
       if (!db.expenses) db.expenses = [];
       db.expenses = db.expenses.filter(e => e.id !== parseInt(id));
+      saveMockDb(db);
+      return { success: true };
+    }
+  },
+
+  // 8. SITE PROGRESS PHOTOS OPERATIONS
+  async getPhotos(siteId = null) {
+    if (isPostgresMode) {
+      let query = 'SELECT p.*, s.name as site_name FROM site_photos p JOIN sites s ON p.site_id = s.id';
+      const params = [];
+      if (siteId) {
+        query += ' WHERE p.site_id = $1';
+        params.push(siteId);
+      }
+      query += ' ORDER BY p.id DESC';
+      const res = await pool.query(query, params);
+      return res.rows;
+    } else {
+      const db = loadMockDb();
+      if (!db.photos) db.photos = [];
+      let phts = db.photos.map(p => {
+        const site = db.sites.find(s => s.id === p.site_id);
+        return { ...p, site_name: site ? site.name : 'Unknown Site' };
+      });
+      if (siteId) {
+        phts = phts.filter(p => p.site_id === parseInt(siteId));
+      }
+      return phts.sort((a, b) => b.id - a.id);
+    }
+  },
+
+  async createPhoto(data) {
+    const { siteId, date, description, imageData } = data;
+    if (isPostgresMode) {
+      const res = await pool.query(
+        'INSERT INTO site_photos (site_id, date, description, image_data) VALUES ($1, $2, $3, $4) RETURNING *',
+        [siteId, date, description, imageData]
+      );
+      // Fetch with site_name
+      const resSite = await pool.query(
+        'SELECT p.*, s.name as site_name FROM site_photos p JOIN sites s ON p.site_id = s.id WHERE p.id = $1',
+        [res.rows[0].id]
+      );
+      return resSite.rows[0];
+    } else {
+      const db = loadMockDb();
+      if (!db.photos) db.photos = [];
+      const newPhoto = {
+        id: db.photos.length > 0 ? Math.max(...db.photos.map(p => p.id)) + 1 : 1,
+        site_id: parseInt(siteId),
+        date,
+        description,
+        image_data: imageData,
+        created_at: new Date().toISOString()
+      };
+      db.photos.push(newPhoto);
+      saveMockDb(db);
+      
+      const site = db.sites.find(s => s.id === newPhoto.site_id);
+      return { ...newPhoto, site_name: site ? site.name : 'Unknown Site' };
+    }
+  },
+
+  async deletePhoto(id) {
+    if (isPostgresMode) {
+      await pool.query('DELETE FROM site_photos WHERE id = $1', [id]);
+      return { success: true };
+    } else {
+      const db = loadMockDb();
+      if (!db.photos) db.photos = [];
+      db.photos = db.photos.filter(p => p.id !== parseInt(id));
       saveMockDb(db);
       return { success: true };
     }

@@ -187,6 +187,7 @@ function setupIcons() {
   document.getElementById('icon-employees').innerHTML = icons.employees;
   document.getElementById('icon-sites').innerHTML = icons.sites;
   document.getElementById('icon-expenses').innerHTML = icons.expenses;
+  document.getElementById('icon-photos').innerHTML = icons.photos;
   document.getElementById('icon-payroll').innerHTML = icons.payroll;
   document.getElementById('icon-logout').innerHTML = icons.logout;
   document.getElementById('icon-db').innerHTML = icons.db;
@@ -263,6 +264,10 @@ function switchView(viewName) {
     elements.viewTitle.textContent = 'Expense Tracker';
     elements.viewSubtitle.textContent = 'Track daily expenses and cash provisions for site locations';
     renderExpensesView();
+  } else if (viewName === 'photos') {
+    elements.viewTitle.textContent = 'Progress Photos';
+    elements.viewSubtitle.textContent = 'Track and verify daily visual work progress at site locations';
+    renderPhotosView();
   } else if (viewName === 'payroll') {
     elements.viewTitle.textContent = 'Payroll & Salary Calculator';
     elements.viewSubtitle.textContent = 'Automate payouts based on employee attendance';
@@ -337,6 +342,12 @@ function showToast(message, type = 'info') {
 function openModal(htmlContent) {
   elements.modalContainer.innerHTML = htmlContent;
   elements.modalOverlay.classList.add('active');
+
+  elements.modalOverlay.onclick = (event) => {
+    if (event.target === elements.modalOverlay) {
+      closeModal();
+    }
+  };
   
   // Bind close buttons automatically
   const closeBtns = elements.modalContainer.querySelectorAll('.modal-close, .btn-cancel');
@@ -347,6 +358,8 @@ function openModal(htmlContent) {
 
 function closeModal() {
   elements.modalOverlay.classList.remove('active');
+  elements.modalOverlay.onclick = null;
+  elements.modalContainer.classList.remove('modal-wide');
   setTimeout(() => {
     elements.modalContainer.innerHTML = '';
   }, 250);
@@ -1872,6 +1885,282 @@ function openExpenseModal() {
       showToast('Error connecting to expense services.', 'error');
     } finally {
       submitBtn.disabled = false;
+    }
+  });
+}
+
+// --- 9. RENDER PROGRESS PHOTOS ---
+async function renderPhotosView() {
+  if (state.sites.length === 0) {
+    elements.workspace.innerHTML = `
+      <div class="empty-state">
+        <span>${icons.sites}</span>
+        <h3>No site locations defined</h3>
+        <p>Please add a project site location first in the "Site Locations" tab.</p>
+      </div>
+    `;
+    return;
+  }
+
+  const isAdmin = state.user && state.user.role === 'admin';
+
+  elements.workspace.innerHTML = `
+    <div class="attendance-grid-container">
+      
+      <!-- Selection bar -->
+      <div class="attendance-filters">
+        <div class="filters-left">
+          <div class="filter-item" id="photo-site-filter-container">
+            <label class="form-label" for="photo-site-select">Project Site:</label>
+            <select class="form-select" id="photo-site-select" style="min-width: 220px;">
+              ${isAdmin ? '<option value="">All Project Sites</option>' : ''}
+              ${state.sites.map(s => `<option value="${s.id}" ${state.selectedSiteId == s.id ? 'selected' : ''}>${s.name}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        
+        <button class="header-btn primary" id="photo-upload-btn">
+          ${icons.plus} Upload Photo
+        </button>
+      </div>
+
+      <!-- Gallery Grid -->
+      <div id="photo-gallery-target" style="margin-top:16px;">
+        <div class="empty-state">
+          <span>${icons.spinner}</span>
+          <h3>Fetching progress photos...</h3>
+        </div>
+      </div>
+      
+    </div>
+  `;
+
+  // Hide site selector for manager, set default selectedSiteId
+  if (state.user && state.user.role === 'manager') {
+    const container = document.getElementById('photo-site-filter-container');
+    if (container) container.style.display = 'none';
+    state.selectedSiteId = state.user.siteId;
+  } else if (isAdmin && !state.selectedSiteId) {
+    const select = document.getElementById('photo-site-select');
+    if (select) select.value = '';
+  }
+
+  // Bind actions
+  const siteSelect = document.getElementById('photo-site-select');
+  const uploadBtn = document.getElementById('photo-upload-btn');
+
+  siteSelect.addEventListener('change', (e) => {
+    state.selectedSiteId = e.target.value;
+    loadPhotoRecords();
+  });
+
+  uploadBtn.addEventListener('click', openPhotoModal);
+
+  // Load photos initially
+  loadPhotoRecords();
+}
+
+async function loadPhotoRecords() {
+  const target = document.getElementById('photo-gallery-target');
+  if (!target) return;
+
+  try {
+    const siteParam = state.selectedSiteId ? `?siteId=${state.selectedSiteId}` : '';
+    const res = await fetch(`/api/photos${siteParam}`);
+    const photos = await res.json();
+
+    if (photos.length === 0) {
+      target.innerHTML = `
+        <div class="empty-state">
+          <span>${icons.photos}</span>
+          <h3>No progress photos uploaded yet</h3>
+          <p>Get started by uploading daily visual progress updates from your construction site.</p>
+        </div>
+      `;
+      return;
+    }
+
+    const isAdmin = state.user && state.user.role === 'admin';
+
+    target.innerHTML = `
+      <div class="photo-grid">
+        ${photos.map(p => `
+          <div class="photo-card">
+            <div class="photo-img-wrapper">
+              <span class="badge blue photo-badge">${p.site_name}</span>
+              ${(isAdmin || (state.user && state.user.siteId === p.site_id)) ? `
+                <button class="photo-delete-btn" onclick="deletePhotoRecord(${p.id})" title="Delete Photo">
+                  ${icons.close}
+                </button>
+              ` : ''}
+              <img class="photo-img photo-clickable" src="${p.image_data}" alt="${p.description || 'Work progress image'}">
+            </div>
+            <div class="photo-info">
+              <p class="photo-desc">${p.description}</p>
+              <div class="photo-footer">
+                <span class="photo-date">${new Date(p.date).toLocaleDateString()}</span>
+                <span class="photo-site">#${p.id}</span>
+              </div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+
+    document.querySelectorAll('.photo-clickable').forEach(img => {
+      img.addEventListener('click', () => {
+        openPhotoViewer(img.src, img.alt || 'Work progress image');
+      });
+    });
+  } catch (err) {
+    target.innerHTML = `
+      <div class="empty-state">
+        <span style="color:var(--accent-crimson);">${icons.inactive}</span>
+        <h3>Failed to fetch progress photos</h3>
+        <p>Error: ${err.message}</p>
+      </div>
+    `;
+  }
+}
+
+window.deletePhotoRecord = async function(id) {
+  if (!confirm('Are you sure you want to delete this progress photo?')) return;
+  try {
+    const res = await fetch(`/api/photos/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      showToast('Progress photo deleted successfully.', 'success');
+      loadPhotoRecords();
+    } else {
+      showToast('Failed to delete photo.', 'error');
+    }
+  } catch (err) {
+    showToast('Network error deleting photo.', 'error');
+  }
+};
+
+function openPhotoViewer(imageSrc, description = 'Work progress image') {
+  const html = `
+    <div class="modal-header">
+      <h3 class="modal-title">Progress Photo</h3>
+      <button class="modal-close">${icons.close}</button>
+    </div>
+    <div class="modal-body photo-viewer-body">
+      <div class="photo-viewer-frame">
+        <img class="photo-viewer-image" src="${imageSrc}" alt="${description}">
+      </div>
+      <p class="photo-viewer-caption">${description}</p>
+    </div>
+  `;
+
+  elements.modalContainer.classList.add('modal-wide');
+  openModal(html);
+}
+
+function openPhotoModal() {
+  const html = `
+    <div class="modal-header">
+      <h3 class="modal-title">Upload Site Progress Photo</h3>
+      <button class="modal-close">${icons.close}</button>
+    </div>
+    <form id="photo-form">
+      <div class="modal-body">
+        
+        <div class="form-group">
+          <label class="form-label">Report Date</label>
+          <input type="date" class="form-input" name="date" required value="${new Date().toISOString().split('T')[0]}" max="${new Date().toISOString().split('T')[0]}">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Progress Image (PNG/JPG)</label>
+          <input type="file" id="photo-file-input" class="form-input" accept="image/*" required style="width:100%;">
+          <div class="file-preview-container" id="photo-preview-box">
+            <span style="color:var(--text-muted); font-size:0.85rem;">No file selected</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Description / Work Completed Details</label>
+          <input type="text" class="form-input" name="description" required placeholder="e.g. Concrete pouring finished for Block C first floor slabs" style="width:100%;">
+        </div>
+
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="header-btn btn-cancel">Cancel</button>
+        <button type="submit" class="header-btn primary" id="photo-submit-btn">
+          Upload Update
+        </button>
+      </div>
+    </form>
+  `;
+
+  openModal(html);
+
+  const form = document.getElementById('photo-form');
+  const fileInput = document.getElementById('photo-file-input');
+  const previewBox = document.getElementById('photo-preview-box');
+  let selectedBase64 = null;
+
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) {
+      previewBox.innerHTML = '<span style="color:var(--text-muted); font-size:0.85rem;">No file selected</span>';
+      selectedBase64 = null;
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      selectedBase64 = reader.result;
+      previewBox.innerHTML = `<img class="file-preview-img" src="${selectedBase64}" alt="Selected Image">`;
+    };
+    reader.onerror = () => {
+      showToast('Error reading selected image.', 'error');
+    };
+    reader.readAsDataURL(file);
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!selectedBase64) {
+      showToast('Please select a progress image to upload.', 'error');
+      return;
+    }
+
+    const fd = new FormData(form);
+    const payload = Object.fromEntries(fd.entries());
+    payload.imageData = selectedBase64;
+    
+    // Automatically set siteId if site manager, or grab from selection for admin
+    payload.siteId = state.user.role === 'manager' ? state.user.siteId : state.selectedSiteId;
+    if (!payload.siteId) {
+      showToast('Please select a project site for this photo.', 'error');
+      return;
+    }
+
+    const submitBtn = document.getElementById('photo-submit-btn');
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = `${icons.spinner} Uploading...`;
+
+    try {
+      const res = await fetch('/api/photos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        showToast('Site progress photo uploaded successfully!', 'success');
+        closeModal();
+        loadPhotoRecords();
+      } else {
+        const errorData = await res.json();
+        showToast(errorData.error || 'Failed to upload photo.', 'error');
+      }
+    } catch (err) {
+      showToast(err.message || 'Error uploading photo. Please check the server connection.', 'error');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = 'Upload Update';
     }
   });
 }

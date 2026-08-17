@@ -65535,5 +65535,15 @@
       "created_at": "2026-06-01T17:07:39.802Z"
     }
   ],
-  "payroll": []
+  "payroll": [],
+  "photos": [
+    {
+      "id": 1,
+      "site_id": 1,
+      "date": "2026-08-14",
+      "description": "Test upload",
+      "image_data": "data:image/png;base64,abc",
+      "created_at": "2026-08-14T06:23:35.638Z"
+    }
+  ]
 }
